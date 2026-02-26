@@ -1,0 +1,35 @@
+services:
+  mesh-router-perf:
+    image: rg.fr-par.scw.cloud/aptero/mesh-router-perf:latest
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: mesh-router-perf
+    restart: unless-stopped
+    ports:
+      - "3000:3000"
+    volumes:
+      - ./data:/app/data:ro
+    environment:
+      - NODE_ENV=production
+      - PORT=3000
+      - HOST=0.0.0.0
+      - LOG_LEVEL=info
+      - DATA_DIR=/app/data
+    networks:
+      - pcs
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:3000/health"]
+      interval: 30s
+      timeout: 3s
+      retries: 3
+      start_period: 5s
+    deploy:
+      resources:
+        limits:
+          memory: 512M
+          cpus: "1.0"
+
+networks:
+  pcs:
+    external: true
