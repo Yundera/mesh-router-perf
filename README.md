@@ -65,6 +65,23 @@ TARGET_GATEWAY=https://perf.alice.nsl.sh
 TARGET_CF_WORKER=https://perf.alice.cf-domain.com
 ```
 
+## Debugging Routes
+
+Use trace headers to see the routing path:
+
+```bash
+curl -H "X-Mesh-Trace: 1" https://perf-example.domain.com/health
+# Response header: x-mesh-route: cf-worker,nip.io,direct,pcs
+```
+
+Force a specific route:
+
+```bash
+curl -H "X-Mesh-Force: gateway" https://perf-example.domain.com/health
+```
+
+See [benchmarks/README.md](./benchmarks/README.md#debugging-routes) for details.
+
 ## Reports
 
 Benchmark results are saved to `reports/`:

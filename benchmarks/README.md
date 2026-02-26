@@ -106,8 +106,56 @@ k6 run scenarios/http-latency.js
 k6 run --vus 10 --duration 30s scenarios/http-latency.js
 
 # Output to JSON
-k6 run --out json=result.json scenarios/http-latency.js
+k6 run --summary-export=report.json scenarios/http-latency.js
 ```
+
+### Running k6 with Docker
+
+If you don't have k6 installed locally, you can use the Docker image:
+
+```bash
+# Basic usage (IPv4 targets only)
+docker run --rm \
+  -v "$(pwd):/benchmarks" \
+  -e TARGET_DIRECT_SERVICE=https://perf.example.com \
+  -e K6_VUS=10 \
+  -e K6_DURATION=30s \
+  grafana/k6 run /benchmarks/scenarios/http-latency.js
+```
+
+#### IPv6 Targets (nip.io domains)
+
+Docker containers don't have IPv6 connectivity by default. For IPv6 targets (like nip.io domains resolving to IPv6), use `--network host`:
+
+```bash
+# With host networking (required for IPv6)
+docker run --rm --network host \
+  -v "$(pwd):/benchmarks" \
+  -e TARGET_DIRECT_SERVICE=https://perf-2001-bc8-1234-abcd.nip.io \
+  -e K6_VUS=10 \
+  -e K6_DURATION=30s \
+  grafana/k6 run /benchmarks/scenarios/http-latency.js
+```
+
+#### Self-signed/Custom CA Certificates
+
+For targets using custom CA certificates (like gateway-routed domains), add `--insecure-skip-tls-verify`:
+
+```bash
+docker run --rm --network host \
+  -v "$(pwd):/benchmarks" \
+  -e TARGET_DIRECT_SERVICE=https://perf-192-168-1-100.nip.io \
+  grafana/k6 run --insecure-skip-tls-verify /benchmarks/scenarios/http-latency.js
+```
+
+#### Summary
+
+| Target Type | Docker Flag | TLS Flag |
+|-------------|-------------|----------|
+| IPv4 (public) | (none) | (none) |
+| IPv6 / nip.io | `--network host` | (none or `--insecure-skip-tls-verify`) |
+| Custom CA cert | (none) | `--insecure-skip-tls-verify` |
+| IPv6 + Custom CA | `--network host` | `--insecure-skip-tls-verify` |
 
 ## Reports
 
@@ -173,6 +221,53 @@ reports/
 | `custom_upload_throughput_mbps` | Upload speed (Mbps) |
 | `data_received` | Total bytes received |
 | `data_sent` | Total bytes sent |
+
+## Debugging Routes
+
+### Trace Headers
+
+Use `X-Mesh-Trace: 1` to see the routing path taken by a request:
+
+```bash
+curl -s -D- -o /dev/null -H "X-Mesh-Trace: 1" https://perf-wisera.inojob.com/health | grep x-mesh
+# x-mesh-route: cf-worker,nip.io,direct,pcs
+```
+
+**Route segments:**
+| Segment | Description |
+|---------|-------------|
+| `cf-worker` | Request went through Cloudflare Worker |
+| `gateway` | Request went through mesh-router-gateway (OpenResty) |
+| `nip.io` | Resolved via nip.io to PCS IP |
+| `direct` | Direct connection (not tunneled) |
+| `tunnel` | Connection via WireGuard tunnel |
+| `pcs` | Reached the PCS |
+
+### Force Headers
+
+Use `X-Mesh-Force` to force a specific routing path:
+
+```bash
+# Force gateway fallback (bypass direct nip.io)
+curl -H "X-Mesh-Trace: 1" -H "X-Mesh-Force: gateway" https://perf-wisera.inojob.com/health
+
+# Force direct connection
+curl -H "X-Mesh-Trace: 1" -H "X-Mesh-Force: direct" https://perf-wisera.inojob.com/health
+```
+
+### Comparing Routes in Benchmarks
+
+To benchmark different routing paths:
+
+```bash
+# Default path (CF Worker → nip.io direct)
+docker run --rm --network host -v "$(pwd):/benchmarks" \
+  -e TARGET_DIRECT_SERVICE=https://perf-wisera.inojob.com \
+  grafana/k6 run /benchmarks/scenarios/http-latency.js
+
+# Force gateway path (add header in k6 script or use custom scenario)
+# Modify scenarios to include: headers: { "X-Mesh-Force": "gateway" }
+```
 
 ## Thresholds
 
