@@ -7,7 +7,6 @@ Performance testing toolkit for mesh-router infrastructure.
 ### 1. Deploy Test Service to PCS
 
 ```bash
-cd service
 pnpm install
 pnpm build
 docker build -t mesh-router-perf .
@@ -81,10 +80,11 @@ ls reports/
 ### Service
 
 ```bash
-cd service
 pnpm install
 pnpm start          # Development with hot reload
+pnpm build          # Build TypeScript
 pnpm test           # Run tests
+pnpm run generate-data  # Generate test files
 ```
 
 ### Benchmarks
@@ -93,9 +93,15 @@ pnpm test           # Run tests
 # Run single scenario with custom options
 k6 run --vus 10 --duration 30s benchmarks/scenarios/http-latency.js
 
-# Output to different format
-k6 run --out json=result.json benchmarks/scenarios/http-latency.js
+# Output to JSON
+k6 run --summary-export=report.json benchmarks/scenarios/http-latency.js
 ```
+
+## CI/CD
+
+Docker images are automatically built and pushed to GitHub Container Registry on:
+- Push to `main` branch (tagged as `latest`)
+- Version tags (`v*` → `1.2.3`, `1.2`)
 
 ## Architecture
 
