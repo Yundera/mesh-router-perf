@@ -8,6 +8,7 @@ import { echoRoutes } from "./routes/echo.js";
 import { downloadRoutes } from "./routes/download.js";
 import { uploadRoutes } from "./routes/upload.js";
 import { websocketRoutes } from "./routes/websocket.js";
+import { wsPollingRoutes } from "./routes/ws-polling.js";
 import { delayRoutes } from "./routes/delay.js";
 
 config();
@@ -35,6 +36,7 @@ async function main() {
   await fastify.register(downloadRoutes);
   await fastify.register(uploadRoutes);
   await fastify.register(websocketRoutes);
+  await fastify.register(wsPollingRoutes);
   await fastify.register(delayRoutes);
 
   try {
