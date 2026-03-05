@@ -1,17 +1,17 @@
 import Fastify from "fastify";
-import websocket from "@fastify/websocket";
 import multipart from "@fastify/multipart";
 import { config } from "dotenv";
 import http from "http";
+import { Server as SocketIOServer } from "socket.io";
+import { WebSocketServer, WebSocket } from "ws";
 
 import { healthRoutes } from "./routes/health.js";
 import { echoRoutes } from "./routes/echo.js";
 import { downloadRoutes } from "./routes/download.js";
 import { uploadRoutes } from "./routes/upload.js";
-import { websocketRoutes } from "./routes/websocket.js";
-import { wsPollingRoutes } from "./routes/ws-polling.js";
 import { delayRoutes } from "./routes/delay.js";
-import { setupSocketIO } from "./routes/socket-io.js";
+import { setupSocketIOHandlers } from "./routes/socket-io.js";
+import { handleWebSocket } from "./routes/websocket.js";
 
 config();
 
@@ -19,24 +19,66 @@ const PORT = parseInt(process.env.PORT || "3000", 10);
 const HOST = process.env.HOST || "0.0.0.0";
 const LOG_LEVEL = process.env.LOG_LEVEL || "info";
 
-// Create HTTP server first so Socket.IO can attach before Fastify
+// Create HTTP server first
 const httpServer = http.createServer();
+
+// Native WebSocket server for /ws endpoint (noServer mode)
+const wss = new WebSocketServer({ noServer: true });
+
+// Socket.IO server - attach to httpServer
+const io = new SocketIOServer(httpServer, {
+  path: "/socket.io",
+  cors: {
+    origin: "*",
+    methods: ["GET", "POST"],
+  },
+  transports: ["websocket", "polling"],
+});
+setupSocketIOHandlers(io);
+
+// Store Fastify's request handler for later use
+let fastifyHandler: http.RequestListener | null = null;
+
+// Handle native WebSocket connections for /ws
+wss.on("connection", (socket: WebSocket) => {
+  handleWebSocket(socket);
+});
+
+// Handle WebSocket upgrades - route /ws to our server, let Socket.IO handle /socket.io
+httpServer.on("upgrade", (request, socket, head) => {
+  const pathname = new URL(request.url || "", `http://${request.headers.host}`).pathname;
+
+  if (pathname === "/ws") {
+    // Handle native WebSocket connections
+    wss.handleUpgrade(request, socket, head, (ws) => {
+      wss.emit("connection", ws, request);
+    });
+  }
+  // Socket.IO handles /socket.io upgrades automatically
+});
 
 const fastify = Fastify({
   logger: {
     level: LOG_LEVEL,
   },
   serverFactory: (handler) => {
-    httpServer.on("request", handler);
+    fastifyHandler = handler;
+    // Don't add Fastify's handler directly - we'll route manually
     return httpServer;
   },
 });
 
-// Setup Socket.IO BEFORE Fastify plugins (so it handles /socket.io upgrades first)
-const io = setupSocketIO(httpServer);
+// Add a request handler that routes to Socket.IO or Fastify
+httpServer.on("request", (req, res) => {
+  const url = req.url || "";
+  // Socket.IO requests are already handled by Socket.IO's attachment
+  // Only route non-socket.io requests to Fastify
+  if (!url.startsWith("/socket.io") && fastifyHandler) {
+    fastifyHandler(req, res);
+  }
+});
 
 async function main() {
-  await fastify.register(websocket);
   await fastify.register(multipart, {
     limits: {
       fileSize: 6 * 1024 * 1024 * 1024, // 6GB max
@@ -47,8 +89,6 @@ async function main() {
   await fastify.register(echoRoutes);
   await fastify.register(downloadRoutes);
   await fastify.register(uploadRoutes);
-  await fastify.register(websocketRoutes);
-  await fastify.register(wsPollingRoutes);
   await fastify.register(delayRoutes);
 
   try {

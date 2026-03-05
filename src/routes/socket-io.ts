@@ -1,5 +1,4 @@
 import { Server as SocketIOServer, Socket } from "socket.io";
-import type { Server as HttpServer } from "http";
 
 interface EchoMessage {
   type: string;
@@ -8,18 +7,7 @@ interface EchoMessage {
   echo?: unknown;
 }
 
-export function setupSocketIO(httpServer: HttpServer): SocketIOServer {
-  // Attach Socket.IO to the HTTP server BEFORE @fastify/websocket
-  // This ensures Socket.IO gets first dibs on /socket.io WebSocket upgrades
-  const io = new SocketIOServer(httpServer, {
-    path: "/socket.io",
-    cors: {
-      origin: "*",
-      methods: ["GET", "POST"],
-    },
-    transports: ["websocket", "polling"],
-  });
-
+export function setupSocketIOHandlers(io: SocketIOServer): void {
   io.on("connection", (socket: Socket) => {
     const welcome: EchoMessage = {
       type: "connected",
@@ -76,6 +64,4 @@ export function setupSocketIO(httpServer: HttpServer): SocketIOServer {
       console.error(`Socket.IO error for ${socket.id}:`, error);
     });
   });
-
-  return io;
 }
