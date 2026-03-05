@@ -257,17 +257,58 @@ curl -H "X-Mesh-Trace: 1" -H "X-Mesh-Force: direct" https://perf-wisera.inojob.c
 
 ### Comparing Routes in Benchmarks
 
-To benchmark different routing paths:
+To benchmark different routing paths, use the dedicated route comparison scenarios:
+
+#### Available Route Scenarios
+
+| Scenario | File | Route | Description |
+|----------|------|-------|-------------|
+| Default | `http-latency.js` | `cf-worker,nip.io,pcs` | Standard CF Worker path |
+| Gateway/Tunnel | `http-latency-gateway.js` | `cf-worker,gateway,tunnel,pcs` | Forces gateway fallback |
+| Direct sslip.io | `http-latency-direct.js` | `pcs` | Bypasses CF Worker entirely |
+
+#### Finding the Direct sslip.io Domain
+
+To benchmark direct PCS access, first get the sslip.io domain from the backend:
 
 ```bash
-# Default path (CF Worker → nip.io direct)
+# Get the sslip.io domain for a PCS
+curl -s "https://nsl.sh/router/api/resolve/v2/mestio" | jq '.routes[].domain' | grep -v null
+
+# Output: "2001-bc8-3021-201-be24-11ff-fe2e-9336.sslip.io"
+
+# For perf subdomain, prefix with "perf-":
+# https://perf-2001-bc8-3021-201-be24-11ff-fe2e-9336.sslip.io
+```
+
+#### Running Route Comparison
+
+```bash
+# 1. Default path (CF Worker → nip.io direct) - ~38ms latency
 docker run --rm --network host -v "$(pwd):/benchmarks" \
-  -e TARGET_DIRECT_SERVICE=https://perf-wisera.inojob.com \
+  -e TARGET_DIRECT_SERVICE=https://perf-mestio.nsl.sh \
   grafana/k6 run /benchmarks/scenarios/http-latency.js
 
-# Force gateway path (add header in k6 script or use custom scenario)
-# Modify scenarios to include: headers: { "X-Mesh-Force": "gateway" }
+# 2. Gateway + Tunnel path - ~137ms latency
+docker run --rm --network host -v "$(pwd):/benchmarks" \
+  -e TARGET_DIRECT_SERVICE=https://perf-mestio.nsl.sh \
+  grafana/k6 run /benchmarks/scenarios/http-latency-gateway.js
+
+# 3. Direct sslip.io (no CF Worker) - ~7ms latency
+docker run --rm --network host -v "$(pwd):/benchmarks" \
+  -e TARGET_DIRECT_SERVICE=https://perf-2001-bc8-3021-201-be24-11ff-fe2e-9336.sslip.io \
+  grafana/k6 run /benchmarks/scenarios/http-latency-direct.js
 ```
+
+#### Expected Results
+
+| Path | Avg Latency | p95 | Throughput |
+|------|-------------|-----|------------|
+| Direct sslip.io | ~7ms | ~11ms | ~75 req/s |
+| CF + nip.io | ~38ms | ~46ms | ~71 req/s |
+| CF + Gateway + Tunnel | ~137ms | ~162ms | ~34 req/s |
+
+See `reports/2026-03-04_routing-path-comparison.md` for detailed analysis.
 
 ## Thresholds
 

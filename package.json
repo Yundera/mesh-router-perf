@@ -10,6 +10,7 @@
     "build": "tsc",
     "start": "tsc-watch --onSuccess \"node ./dist/index.js\"",
     "test": "tsc && mocha dist/**/*.spec.js",
+    "test-api": "bash test-api.sh",
     "lint": "eslint src --ext ts",
     "generate-data": "tsc && node dist/utils/generate-files.js"
   },
@@ -17,7 +18,8 @@
     "@fastify/multipart": "^9.0.3",
     "@fastify/websocket": "^11.0.2",
     "dotenv": "^17.2.3",
-    "fastify": "^5.3.2"
+    "fastify": "^5.3.2",
+    "socket.io": "^4.8.1"
   },
   "devDependencies": {
     "@types/chai": "^5.2.2",
