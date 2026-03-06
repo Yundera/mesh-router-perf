@@ -10,6 +10,7 @@ import { echoRoutes } from "./routes/echo.js";
 import { downloadRoutes } from "./routes/download.js";
 import { uploadRoutes } from "./routes/upload.js";
 import { delayRoutes } from "./routes/delay.js";
+import { generateRoutes } from "./routes/generate.js";
 import { setupSocketIOHandlers } from "./routes/socket-io.js";
 import { handleWebSocket } from "./routes/websocket.js";
 
@@ -90,6 +91,7 @@ async function main() {
   await fastify.register(downloadRoutes);
   await fastify.register(uploadRoutes);
   await fastify.register(delayRoutes);
+  await fastify.register(generateRoutes);
 
   try {
     await fastify.listen({ port: PORT, host: HOST });

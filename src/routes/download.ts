@@ -6,8 +6,8 @@ const DATA_DIR = process.env.DATA_DIR || "./data";
 
 const FILE_SIZES: Record<string, string> = {
   "50mb": "50mb.bin",
+  "200mb": "200mb.bin",
   "500mb": "500mb.bin",
-  "5gb": "5gb.bin",
 };
 
 interface DownloadParams {
@@ -97,7 +97,7 @@ export async function downloadRoutes(fastify: FastifyInstance) {
     return {
       status: "ok",
       available,
-      usage: "GET /download/:size where size is one of: 50mb, 500mb, 5gb",
+      usage: "GET /download/:size where size is one of: 50mb, 200mb, 500mb",
     };
   });
 }

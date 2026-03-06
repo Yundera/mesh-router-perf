@@ -7,13 +7,12 @@ const DATA_DIR = process.env.DATA_DIR || "./data";
 interface FileConfig {
   name: string;
   size: number;
-  skipUnlessFlagged?: boolean;
 }
 
 const FILES: FileConfig[] = [
   { name: "50mb.bin", size: 50 * 1024 * 1024 },
+  { name: "200mb.bin", size: 200 * 1024 * 1024 },
   { name: "500mb.bin", size: 500 * 1024 * 1024 },
-  { name: "5gb.bin", size: 5 * 1024 * 1024 * 1024, skipUnlessFlagged: true },
 ];
 
 const CHUNK_SIZE = 1024 * 1024; // 1MB chunks
@@ -69,8 +68,6 @@ function formatSize(bytes: number): string {
 }
 
 async function main() {
-  const generateLarge = process.argv.includes("--large");
-
   if (!existsSync(DATA_DIR)) {
     mkdirSync(DATA_DIR, { recursive: true });
     console.log(`Created directory: ${DATA_DIR}`);
@@ -79,13 +76,6 @@ async function main() {
   console.log("Generating test files...\n");
 
   for (const file of FILES) {
-    if (file.skipUnlessFlagged && !generateLarge) {
-      console.log(
-        `Skipping ${file.name} (${formatSize(file.size)}) - use --large flag to generate`
-      );
-      continue;
-    }
-
     const filePath = join(DATA_DIR, file.name);
 
     if (existsSync(filePath)) {
