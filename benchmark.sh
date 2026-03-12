@@ -1,11 +1,11 @@
 #!/bin/bash
 # Unified Network Benchmark Script for mesh-router-perf
-# Usage: ./benchmark.sh <domain> [--force <gateway|direct|tunnel>] [--payload <MB>]
+# Usage: ./benchmark.sh <domain> [options]
 #
 # Examples:
 #   ./benchmark.sh perf-wisera.inojob.com
-#   ./benchmark.sh perf-alice.nsl.sh --force gateway
-#   ./benchmark.sh perf-mestio.nsl.sh --force tunnel --payload 100
+#   ./benchmark.sh perf-wisera.inojob.com --samples 100 --iterations 10
+#   ./benchmark.sh perf-alice.nsl.sh --force gateway --payload 50
 
 set -e
 
@@ -14,8 +14,9 @@ set -e
 # =============================================================================
 DOMAIN=""
 FORCE_ROUTE=""
-PAYLOAD_MB=200
-LATENCY_SAMPLES=10
+PAYLOAD_MB=50
+LATENCY_SAMPLES=20
+ITERATIONS=1
 
 while [[ $# -gt 0 ]]; do
     case $1 in
@@ -31,22 +32,27 @@ while [[ $# -gt 0 ]]; do
             LATENCY_SAMPLES="$2"
             shift 2
             ;;
+        --iterations|--loops)
+            ITERATIONS="$2"
+            shift 2
+            ;;
         -h|--help)
-            echo "Usage: $0 <domain> [--force <gateway|direct|tunnel>] [--payload <MB>] [--samples <N>]"
+            echo "Usage: $0 <domain> [options]"
             echo ""
             echo "Arguments:"
-            echo "  domain              Target domain (e.g., perf-wisera.inojob.com)"
+            echo "  domain                  Target domain (e.g., perf-wisera.inojob.com)"
             echo ""
             echo "Options:"
-            echo "  --force <route>     Force routing path: gateway, direct, or tunnel"
-            echo "  --payload <MB>      Payload size for upload/download tests (default: 200, max: 500)"
-            echo "  --samples <N>       Number of latency samples (default: 10)"
-            echo "  -h, --help          Show this help message"
+            echo "  --force <route>         Force routing path: gateway, direct, or tunnel"
+            echo "  --payload <MB>          Payload size for upload/download (default: 50, max: 100)"
+            echo "  --samples <N>           Number of latency samples (default: 20)"
+            echo "  --iterations <N>        Number of upload/download cycles (default: 1)"
+            echo "  -h, --help              Show this help message"
             echo ""
             echo "Examples:"
             echo "  $0 perf-wisera.inojob.com"
-            echo "  $0 perf-alice.nsl.sh --force gateway"
-            echo "  $0 perf-mestio.nsl.sh --force tunnel --payload 100"
+            echo "  $0 perf-wisera.inojob.com --samples 100 --iterations 10"
+            echo "  $0 perf-alice.nsl.sh --force gateway --payload 50"
             exit 0
             ;;
         *)
@@ -63,8 +69,13 @@ done
 
 if [[ -z "$DOMAIN" ]]; then
     echo "Error: Domain is required"
-    echo "Usage: $0 <domain> [--force <gateway|direct|tunnel>] [--payload <MB>]"
+    echo "Usage: $0 <domain> [options]"
     exit 1
+fi
+
+# Cap payload at 100MB (CF Worker limit)
+if [[ $PAYLOAD_MB -gt 100 ]]; then
+    PAYLOAD_MB=100
 fi
 
 # Normalize domain (add https:// if needed)
@@ -85,16 +96,8 @@ DIM='\033[2m'
 NC='\033[0m'
 
 # =============================================================================
-# Helper Functions (using awk for portability)
+# Helper Functions
 # =============================================================================
-calc() {
-    awk "BEGIN {printf \"%.2f\", $1}"
-}
-
-calc_int() {
-    awk "BEGIN {printf \"%.0f\", $1}"
-}
-
 format_speed() {
     local mbps=$1
     if awk "BEGIN {exit !($mbps >= 1000)}"; then
@@ -131,11 +134,15 @@ format_size() {
 # =============================================================================
 echo ""
 echo -e "${BOLD}=== Network Benchmark ===${NC}"
-echo -e "${CYAN}Target:${NC}  $BASE_URL"
+echo -e "${CYAN}Target:${NC}     $BASE_URL"
 if [[ -n "$FORCE_ROUTE" ]]; then
-    echo -e "${CYAN}Force:${NC}   $FORCE_ROUTE"
+    echo -e "${CYAN}Force:${NC}      $FORCE_ROUTE"
 fi
-echo -e "${CYAN}Payload:${NC} ${PAYLOAD_MB}MB"
+echo -e "${CYAN}Payload:${NC}    ${PAYLOAD_MB}MB"
+echo -e "${CYAN}Samples:${NC}    $LATENCY_SAMPLES (latency)"
+if [[ $ITERATIONS -gt 1 ]]; then
+    echo -e "${CYAN}Iterations:${NC} $ITERATIONS (upload/download)"
+fi
 echo ""
 
 # =============================================================================
@@ -151,11 +158,10 @@ ROUTE_RESPONSE=$(curl -s -D- -o /dev/null -H "X-Mesh-Trace: 1" $CURL_HEADERS "$B
 ROUTE=$(echo "$ROUTE_RESPONSE" | grep -i "x-mesh-route" | cut -d: -f2- | tr -d ' \r\n' || echo "")
 
 if [[ -n "$ROUTE" ]]; then
-    # Format route nicely: cf-worker,nip.io,direct,pcs -> cf-worker -> nip.io -> direct -> pcs
     ROUTE_DISPLAY=$(echo "$ROUTE" | sed 's/,/ -> /g')
-    echo -e "${CYAN}Route:${NC}   $ROUTE_DISPLAY"
+    echo -e "${CYAN}Route:${NC}      $ROUTE_DISPLAY"
 else
-    echo -e "${CYAN}Route:${NC}   ${DIM}(no x-mesh-route header)${NC}"
+    echo -e "${CYAN}Route:${NC}      ${DIM}(no x-mesh-route header)${NC}"
 fi
 echo ""
 
@@ -168,23 +174,19 @@ declare -a LATENCIES
 ERRORS=0
 
 for i in $(seq 1 $LATENCY_SAMPLES); do
-    # Use curl timing to measure total request time
     TIMING=$(curl -s -o /dev/null -w "%{time_total}" $CURL_HEADERS "$BASE_URL/echo" 2>/dev/null || echo "error")
 
     if [[ "$TIMING" == "error" ]]; then
         ((ERRORS++))
     else
-        # Convert to milliseconds
         MS=$(awk "BEGIN {printf \"%.1f\", $TIMING * 1000}")
         LATENCIES+=("$MS")
     fi
 done
 
 if [[ ${#LATENCIES[@]} -gt 0 ]]; then
-    # Sort latencies
     IFS=$'\n' SORTED=($(printf '%s\n' "${LATENCIES[@]}" | sort -n)); unset IFS
 
-    # Calculate stats
     SUM=0
     for lat in "${LATENCIES[@]}"; do
         SUM=$(awk "BEGIN {print $SUM + $lat}")
@@ -193,7 +195,6 @@ if [[ ${#LATENCIES[@]} -gt 0 ]]; then
     MIN="${SORTED[0]}"
     MAX="${SORTED[-1]}"
 
-    # Calculate percentiles
     N=${#SORTED[@]}
     P95_IDX=$(awk "BEGIN {printf \"%.0f\", ($N - 1) * 0.95}")
     P99_IDX=$(awk "BEGIN {printf \"%.0f\", ($N - 1) * 0.99}")
@@ -214,44 +215,62 @@ echo ""
 # =============================================================================
 # Download Test
 # =============================================================================
-# Map payload size to available file (max 500mb)
+# Map payload size to available file
 if [[ $PAYLOAD_MB -le 50 ]]; then
     DL_SIZE="50mb"
-    DL_BYTES=$((50 * 1024 * 1024))
-elif [[ $PAYLOAD_MB -le 200 ]]; then
-    DL_SIZE="200mb"
-    DL_BYTES=$((200 * 1024 * 1024))
+elif [[ $PAYLOAD_MB -le 100 ]]; then
+    DL_SIZE="50mb"
 else
-    DL_SIZE="500mb"
-    DL_BYTES=$((500 * 1024 * 1024))
+    DL_SIZE="200mb"
 fi
 
-echo -e "${BOLD}Download${NC} ${DIM}($DL_SIZE)${NC}"
+echo -e "${BOLD}Download${NC} ${DIM}($DL_SIZE x $ITERATIONS iterations)${NC}"
 
-# First check if file exists
-DL_CHECK=$(curl -s $CURL_HEADERS "$BASE_URL/download/$DL_SIZE" -w "%{http_code}" -o /tmp/dl_check_$$ 2>/dev/null)
-DL_BODY=$(cat /tmp/dl_check_$$ 2>/dev/null || echo "")
-rm -f /tmp/dl_check_$$ 2>/dev/null
+# Check if file exists first
+DL_CHECK=$(curl -s $CURL_HEADERS "$BASE_URL/download/$DL_SIZE" -w "%{http_code}" -o /dev/null --max-time 5 2>/dev/null || echo "000")
 
-if [[ "$DL_CHECK" != "200" ]] || echo "$DL_BODY" | grep -q '"status":"error"'; then
-    echo -e "  ${YELLOW}File not available - run 'pnpm run generate-data' on server${NC}"
+if [[ "$DL_CHECK" != "200" ]]; then
+    echo -e "  ${YELLOW}File not available (HTTP $DL_CHECK) - run 'curl -X POST $BASE_URL/generate'${NC}"
 else
-    # Download with timing (actual timed download)
-    DL_RESULT=$(curl -s -o /dev/null -w "%{size_download} %{time_total} %{time_starttransfer}" \
-        $CURL_HEADERS "$BASE_URL/download/$DL_SIZE" 2>/dev/null || echo "0 0 0")
+    declare -a DL_SPEEDS
+    declare -a DL_TIMES
+    TOTAL_BYTES=0
 
-    read DL_DOWNLOADED DL_TIME DL_TTFB <<< "$DL_RESULT"
+    for i in $(seq 1 $ITERATIONS); do
+        DL_RESULT=$(curl -s -o /dev/null -w "%{size_download} %{time_total} %{time_starttransfer}" \
+            $CURL_HEADERS "$BASE_URL/download/$DL_SIZE" 2>/dev/null || echo "0 0 0")
 
-    if [[ "$DL_DOWNLOADED" -gt 1000 && "$DL_TIME" != "0" ]]; then
-        # Calculate throughput in Mbps (bytes * 8 / seconds / 1_000_000)
-        DL_MBPS=$(awk "BEGIN {printf \"%.2f\", $DL_DOWNLOADED * 8 / $DL_TIME / 1000000}")
-        DL_TIME_MS=$(awk "BEGIN {printf \"%.0f\", $DL_TIME * 1000}")
-        DL_TTFB_MS=$(awk "BEGIN {printf \"%.0f\", $DL_TTFB * 1000}")
+        read bytes time ttfb <<< "$DL_RESULT"
 
-        printf "  ${GREEN}Speed:${NC} %s  ${DIM}|${NC}  Downloaded: %s  Time: %s  TTFB: %s\n" \
-            "$(format_speed $DL_MBPS)" "$(format_size $DL_DOWNLOADED)" "$(format_time $DL_TIME_MS)" "$(format_time $DL_TTFB_MS)"
+        if [[ "$bytes" -gt 0 && "$time" != "0" ]]; then
+            MBPS=$(awk "BEGIN {printf \"%.1f\", $bytes * 8 / $time / 1000000}")
+            TIME_MS=$(awk "BEGIN {printf \"%.0f\", $time * 1000}")
+            DL_SPEEDS+=("$MBPS")
+            DL_TIMES+=("$TIME_MS")
+            TOTAL_BYTES=$((TOTAL_BYTES + bytes))
+        fi
+    done
+
+    if [[ ${#DL_SPEEDS[@]} -gt 0 ]]; then
+        # Calculate averages
+        SUM_SPEED=0
+        SUM_TIME=0
+        for s in "${DL_SPEEDS[@]}"; do SUM_SPEED=$(awk "BEGIN {print $SUM_SPEED + $s}"); done
+        for t in "${DL_TIMES[@]}"; do SUM_TIME=$(awk "BEGIN {print $SUM_TIME + $t}"); done
+
+        AVG_SPEED=$(awk "BEGIN {printf \"%.1f\", $SUM_SPEED / ${#DL_SPEEDS[@]}}")
+        AVG_TIME=$(awk "BEGIN {printf \"%.0f\", $SUM_TIME / ${#DL_TIMES[@]}}")
+
+        # Min/Max speed
+        IFS=$'\n' SORTED_SPEEDS=($(printf '%s\n' "${DL_SPEEDS[@]}" | sort -n)); unset IFS
+        MIN_SPEED="${SORTED_SPEEDS[0]}"
+        MAX_SPEED="${SORTED_SPEEDS[-1]}"
+
+        printf "  ${GREEN}Avg:${NC} %s  ${DIM}|${NC}  Min: %s  Max: %s  Time: %s\n" \
+            "$(format_speed $AVG_SPEED)" "$(format_speed $MIN_SPEED)" "$(format_speed $MAX_SPEED)" "$(format_time $AVG_TIME)"
+        printf "  ${DIM}Total: $(format_size $TOTAL_BYTES) in $ITERATIONS iterations${NC}\n"
     else
-        echo -e "  ${YELLOW}Download failed${NC}"
+        echo -e "  ${YELLOW}All downloads failed${NC}"
     fi
 fi
 echo ""
@@ -259,54 +278,58 @@ echo ""
 # =============================================================================
 # Upload Test
 # =============================================================================
-UPLOAD_BYTES=$((PAYLOAD_MB * 1024 * 1024))
-echo -e "${BOLD}Upload${NC} ${DIM}(${PAYLOAD_MB}MB)${NC}"
+echo -e "${BOLD}Upload${NC} ${DIM}(${PAYLOAD_MB}MB x $ITERATIONS iterations)${NC}"
 
-# Generate random data to temp file first (more reliable than piping)
-UPLOAD_FILE="/tmp/upload_test_$$"
+# Create upload file once
+UPLOAD_FILE="/tmp/upload_bench_$$"
 dd if=/dev/urandom of="$UPLOAD_FILE" bs=1M count=$PAYLOAD_MB 2>/dev/null
 
-# Upload with timing
-UL_RESULT=$(curl -s -X POST \
-    -H "Content-Type: application/octet-stream" \
-    $CURL_HEADERS \
-    --data-binary "@$UPLOAD_FILE" \
-    -w "\n%{size_upload} %{time_total}" \
-    "$BASE_URL/upload" 2>/dev/null || echo "error")
+declare -a UL_SPEEDS
+declare -a UL_TIMES
+TOTAL_BYTES=0
 
-rm -f "$UPLOAD_FILE" 2>/dev/null
+for i in $(seq 1 $ITERATIONS); do
+    UL_RESULT=$(curl -s -X POST \
+        -H "Content-Type: application/octet-stream" \
+        $CURL_HEADERS \
+        --data-binary "@$UPLOAD_FILE" \
+        -w "%{size_upload} %{time_total}" \
+        -o /dev/null \
+        "$BASE_URL/upload" 2>/dev/null || echo "0 0")
 
-if [[ "$UL_RESULT" != "error" ]]; then
-    # Parse response - last line has timing info
-    UL_TIMING=$(echo "$UL_RESULT" | tail -1)
-    UL_RESPONSE=$(echo "$UL_RESULT" | head -n -1)
+    read bytes time <<< "$UL_RESULT"
 
-    read UL_UPLOADED UL_TIME <<< "$UL_TIMING"
-
-    if [[ -n "$UL_UPLOADED" && "$UL_UPLOADED" != "0" && -n "$UL_TIME" && "$UL_TIME" != "0" ]]; then
-        # Calculate throughput (client-side)
-        UL_MBPS=$(awk "BEGIN {printf \"%.2f\", $UL_UPLOADED * 8 / $UL_TIME / 1000000}")
-        UL_TIME_MS=$(awk "BEGIN {printf \"%.0f\", $UL_TIME * 1000}")
-
-        # Parse server-side throughput from JSON response
-        SERVER_MBPS=$(echo "$UL_RESPONSE" | sed -n 's/.*"throughput_mbps":\([0-9.]*\).*/\1/p')
-
-        printf "  ${GREEN}Speed:${NC} %s  ${DIM}|${NC}  Uploaded: %s  Time: %s" \
-            "$(format_speed $UL_MBPS)" "$(format_size $UL_UPLOADED)" "$(format_time $UL_TIME_MS)"
-
-        if [[ -n "$SERVER_MBPS" && "$SERVER_MBPS" != "0" ]]; then
-            # Only show server throughput if it's reasonable (< 10 Gbps)
-            SERVER_CHECK=$(awk "BEGIN {print ($SERVER_MBPS < 10000) ? 1 : 0}")
-            if [[ "$SERVER_CHECK" == "1" ]]; then
-                printf "  ${DIM}(server: %s)${NC}" "$(format_speed $SERVER_MBPS)"
-            fi
-        fi
-        printf "\n"
-    else
-        echo -e "  ${YELLOW}Upload failed${NC}"
+    if [[ "$bytes" -gt 0 && "$time" != "0" ]]; then
+        MBPS=$(awk "BEGIN {printf \"%.1f\", $bytes * 8 / $time / 1000000}")
+        TIME_MS=$(awk "BEGIN {printf \"%.0f\", $time * 1000}")
+        UL_SPEEDS+=("$MBPS")
+        UL_TIMES+=("$TIME_MS")
+        TOTAL_BYTES=$((TOTAL_BYTES + bytes))
     fi
+done
+
+rm -f "$UPLOAD_FILE"
+
+if [[ ${#UL_SPEEDS[@]} -gt 0 ]]; then
+    # Calculate averages
+    SUM_SPEED=0
+    SUM_TIME=0
+    for s in "${UL_SPEEDS[@]}"; do SUM_SPEED=$(awk "BEGIN {print $SUM_SPEED + $s}"); done
+    for t in "${UL_TIMES[@]}"; do SUM_TIME=$(awk "BEGIN {print $SUM_TIME + $t}"); done
+
+    AVG_SPEED=$(awk "BEGIN {printf \"%.1f\", $SUM_SPEED / ${#UL_SPEEDS[@]}}")
+    AVG_TIME=$(awk "BEGIN {printf \"%.0f\", $SUM_TIME / ${#UL_TIMES[@]}}")
+
+    # Min/Max speed
+    IFS=$'\n' SORTED_SPEEDS=($(printf '%s\n' "${UL_SPEEDS[@]}" | sort -n)); unset IFS
+    MIN_SPEED="${SORTED_SPEEDS[0]}"
+    MAX_SPEED="${SORTED_SPEEDS[-1]}"
+
+    printf "  ${GREEN}Avg:${NC} %s  ${DIM}|${NC}  Min: %s  Max: %s  Time: %s\n" \
+        "$(format_speed $AVG_SPEED)" "$(format_speed $MIN_SPEED)" "$(format_speed $MAX_SPEED)" "$(format_time $AVG_TIME)"
+    printf "  ${DIM}Total: $(format_size $TOTAL_BYTES) in $ITERATIONS iterations${NC}\n"
 else
-    echo -e "  ${YELLOW}Upload failed${NC}"
+    echo -e "  ${YELLOW}All uploads failed${NC}"
 fi
 echo ""
 
@@ -314,4 +337,4 @@ echo ""
 # Summary
 # =============================================================================
 echo -e "${DIM}---${NC}"
-echo -e "${DIM}Tip: Use --force gateway|direct|tunnel to test different routing paths${NC}"
+echo -e "${DIM}Tip: Use --samples 100 --iterations 10 for more accurate results${NC}"
