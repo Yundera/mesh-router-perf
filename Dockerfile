@@ -1,17 +1,24 @@
 # ============================================
 # Stage 1: Build
 # ============================================
-FROM node:22-alpine AS builder
+FROM node:24-alpine AS builder
 
-RUN npm install -g pnpm
+ENV PNPM_HOME="/pnpm"
+ENV PATH="$PNPM_HOME:$PATH"
+
+# Install corepack and enable it
+RUN npm install -g corepack@latest && corepack enable
 
 WORKDIR /app
 
 # Copy package files first (better layer caching)
-COPY package.json pnpm-lock.yaml* ./
+COPY package.json pnpm-lock.yaml ./
+
+# Install the exact pnpm version specified in package.json
+RUN corepack install
 
 # Install ALL dependencies (need devDeps for TypeScript)
-RUN pnpm install --frozen-lockfile || pnpm install
+RUN --mount=type=cache,id=pnpm,target=/pnpm/store pnpm install --frozen-lockfile
 
 # Copy source and build
 COPY tsconfig.json ./
@@ -20,12 +27,12 @@ COPY src ./src
 RUN pnpm build
 
 # Install production deps in separate directory for clean copy
-RUN pnpm install --prod --frozen-lockfile || pnpm install --prod
+RUN --mount=type=cache,id=pnpm,target=/pnpm/store pnpm install --prod --frozen-lockfile
 
 # ============================================
 # Stage 2: Production (minimal alpine)
 # ============================================
-FROM node:22-alpine
+FROM node:24-alpine
 
 # Install curl for healthchecks
 RUN apk add --no-cache curl ca-certificates
